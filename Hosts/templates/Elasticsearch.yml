@@ -1,0 +1,10 @@
+
+cluster.name: example-logging
+node.name: node-1
+node.roles: [master, data, ingest]
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+network.host: 0.0.0.0
+discovery.seed_hosts: ["fhmjitotagf7d67mpsej.auto.internal"] 
+cluster.initial_master_nodes: ["node-1"]
+action.destructive_requires_name: true

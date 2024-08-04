@@ -1,0 +1,502 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: Update and upgrade apt packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+        
+    - name: Install basic packages
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - python3
+          - python3-pip
+        state: present
+        update_cache: True
+
+    - name: "Install Python modules"
+      pip:
+        name: 
+          - ansible
+          - netaddr
+        state: present
+
+    - name: Creating allowing to read the syslog file
+      ansible.builtin.shell:
+        cmd: sudo chmod o+r /var/log/syslog
+
+    - name: Creating a link
+      ansible.builtin.shell:
+        cmd: sudo ln -s /var/log/syslog /var/log/linktosyslog.log
+
+- name: Webservers
+  hosts: webservers
+  become: true
+  tasks:
+    - name: install nginx
+      apt: 
+        name: nginx 
+        state: present
+
+    - name: Creating allowing to read the syslog file
+      ansible.builtin.shell:
+        cmd: sudo sudo chmod o+r /var/log/nginx/access.log
+
+    - name: Creating a link
+      ansible.builtin.shell:
+        cmd: sudo ln -s /var/log/nginx/access.log /var/log/linktoaccesslog.log
+
+    - name: Creating allowing to read the syslog file
+      ansible.builtin.shell:
+        cmd: sudo sudo chmod o+r /var/log/nginx/access.log
+
+    - name: Creating a link
+      ansible.builtin.shell:
+        cmd: sudo ln -s /var/log/nginx/error.log /var/log/linktoerrorlog.log
+
+    - name: Start and enable Nginx service
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Copy "index.html" to default Nginx location
+      copy:
+        src: ./templates/index.html
+        dest: /var/www/html/index.nginx-debian.html
+        mode: 0644
+      notify:
+         - Restart Nginx
+  
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+
+- name: zabbix-server
+  hosts: zabbix-server
+  become: yes
+  vars:
+    pg_hba_conf: /etc/postgresql/14/main/pg_hba.conf
+    postgresql_conf: /etc/postgresql/14/main/postgresql.conf
+
+  tasks:
+    - name: Ensure required packages are installed
+      apt:
+        name: 
+          - wget
+          - gnupg
+          - postgresql
+          - postgresql-contrib
+          - libpq-dev
+          - python3-pip
+          - python3-dev
+          - python3-venv
+          - python3-psycopg2
+        state: present
+
+    - name: Ensure pip is installed
+      apt:
+        name: python3-pip
+        state: present
+
+    - name: Download Zabbix release package
+      get_url:
+        url: https://repo.zabbix.com/zabbix/6.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.0-4+ubuntu22.04_all.deb
+        dest: /home/ubuntu/zabbix-release.deb
+
+
+    - name: Install Zabbix release package using dpkg
+      apt:
+        deb: /home/ubuntu/zabbix-release.deb
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Zabbix server and related packages
+      apt:
+        name:
+          - zabbix-server-pgsql
+          - zabbix-frontend-php
+          - zabbix-apache-conf
+          - zabbix-sql-scripts
+          - zabbix-agent
+          - php8.1-pgsql
+        state: present
+
+    - name: Ensure PostgreSQL is installed
+      apt:
+        name: postgresql
+        state: present
+
+    - name: Ensure PostgreSQL is running and enabled
+      service:
+        name: postgresql
+        state: started
+        enabled: true
+
+    - name: Ensure the PostgreSQL client is installed
+      apt:
+        name: postgresql-client
+        state: present
+
+    - name: Install PostgreSQL development libraries (optional)
+      apt:
+        name: libpq-dev
+        state: present
+    
+    - name: Ensure the pg_hba.conf contains md5
+      ansible.builtin.lineinfile:
+        path: "{{ pg_hba_conf }}"
+        regexp: '^(local\s+all\s+all\s+)peer$'
+        line: 'local   all             all                                     md5'
+        backrefs: yes
+      
+
+    - name: Ensure IPv4 connections use md5
+      ansible.builtin.lineinfile:
+        path: "{{ pg_hba_conf }}"
+        regexp: '^host\s+all\s+all\s+127.0.0.1/32\s+peer$'
+        line: 'host    all             all             127.0.0.1/32            md5'
+        backrefs: yes
+      
+
+    - name: Ensure IPv6 connections use md5
+      ansible.builtin.lineinfile:
+        path: "{{ pg_hba_conf }}"
+        regexp: '^host\s+all\s+all\s+::1/128\s+peer$'
+        line: 'host    all             all             ::1/128                 md5'
+        backrefs: yes
+      
+
+    - name: Ensure replication connections use md5
+      ansible.builtin.lineinfile:
+        path: "{{ pg_hba_conf }}"
+        regexp: '^(local\s+replication\s+all\s+)peer$'
+        line: 'local   replication     all                                     md5'
+        backrefs: yes
+      
+
+    - name: Ensure replication host connections use md5
+      ansible.builtin.lineinfile:
+        path: "{{ pg_hba_conf }}"
+        regexp: '^host\s+replication\s+all\s+127.0.0.1/32\s+peer$'
+        line: 'host    replication     all             127.0.0.1/32            md5'
+        backrefs: yes
+      
+
+    - name: Ensure replication host connections over IPv6 use md5
+      ansible.builtin.lineinfile:
+        path: "{{ pg_hba_conf }}"
+        regexp: '^host\s+replication\s+all\s+::1/128\s+peer$'
+        line: 'host    replication     all             ::1/128                 md5'
+        backrefs: yes
+      
+    - name: Ensure replication connections use md5
+      ansible.builtin.lineinfile:
+        path: "{{ pg_hba_conf }}"
+        regexp: '^local\s+all\s+postgres\s+peer$'
+        line: 'local   all             postgres                                md5'
+        backrefs: yes
+
+    - name: Set listen_addresses in postgresql.conf
+      ansible.builtin.lineinfile:
+        path: "{{ postgresql_conf }}"
+        regexp: '^#listen_addresses = .*$'
+        line: "listen_addresses = '*'"
+        backrefs: yes
+      
+    - name: Create Zabbix database owned by Zabbix user
+      ansible.builtin.shell:
+        cmd: sudo chown -R postgres:postgres /usr/share/zabbix-sql-scripts
+
+    - name: Create Zabbix database owned by Zabbix user
+      ansible.builtin.shell:
+        cmd: sudo chmod -R u+rx /usr/share/zabbix-sql-scripts
+        
+    - name: Create Zabbix database owned by Zabbix user
+      ansible.builtin.shell:
+        cmd: sudo chmod o+rx /home/ubuntu
+
+    - name: Restart and enable Zabbix and related services
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: true
+      loop:
+        - postgresql
+
+    - name: Create Zabbix database owned by Zabbix user
+      ansible.builtin.shell:
+        cmd: su - postgres -c "psql --command \"ALTER USER postgres WITH PASSWORD 'zabbix';\""
+
+    - name: Create Zabbix database owned by Zabbix user
+      ansible.builtin.shell:
+        cmd: su - postgres -c "psql --command \"CREATE USER zabbix WITH PASSWORD 'zabbix';\""
+
+    - name: Create Zabbix database owned by Zabbix user
+      ansible.builtin.shell:
+        cmd: su - postgres -c "psql --command \"CREATE DATABASE zabbix OWNER zabbix;\""
+
+    - name: Restart and enable Zabbix and related services
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: true
+      loop:
+        - postgresql
+
+    - name: Load Zabbix schema
+      shell: |
+        zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | psql -U zabbix -d zabbix 
+      environment:
+        PGPASSWORD: "zabbix"
+   
+    - name: Set DBPassword in Zabbix server configuration
+      ansible.builtin.lineinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        regexp: '^DBPassword='
+        line: 'DBPassword=zabbix'
+
+    - name: Restart and enable Zabbix and related services
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: true
+      loop:
+        - zabbix-server
+        - zabbix-agent
+        - apache2
+
+
+- name: Install Zabbix Agent
+  hosts: zabbix-agents
+  become: true
+  tasks:
+      
+    - name: Ensure wget is installed
+      apt:
+        name: wget
+        state: present
+
+    - name: Download Zabbix release package
+      get_url:
+        url: https://repo.zabbix.com/zabbix/6.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.0-4+ubuntu22.04_all.deb
+        dest: /home/ubuntu/zabbix-release.deb
+
+    - name: Install Zabbix release package using dpkg
+      apt:
+        deb: /home/ubuntu/zabbix-release.deb
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Zabbix agent
+      apt:
+        name: zabbix-agent
+        state: present
+
+    - name: Update Zabbix agent configuration
+      lineinfile:
+        path: /etc/zabbix/zabbix_agentd.conf
+        regexp: '^Server='
+        line: 'Server=fhmhm1omke642ji3q09n.auto.internal' #IP-HERE
+        state: present
+
+    - name: Update Zabbix agent configuration
+      lineinfile:
+        path: /etc/zabbix/zabbix_agentd.conf
+        regexp: '^AllowRoot='
+        line: 'AllowRoot=1' 
+        state: present
+
+    - name: Update Zabbix agent configuration
+      lineinfile:
+        path: /etc/zabbix/zabbix_agentd.conf
+        regexp: '^ServerActive=127.0.0.1'
+        line: 'ServerActive=fhmhm1omke642ji3q09n.auto.internal' 
+        state: present
+
+    - name: Restart Zabbix agent service
+      service:
+        name: zabbix-agent
+        state: restarted
+
+    - name: Enable Zabbix agent service at boot
+      service:
+        name: zabbix-agent
+        enabled: true
+
+- name: Install and configure Elasticsearch
+  hosts: Elasticsearch
+  become: yes
+  tasks:
+    - name: Update package list and install dependencies
+      apt:
+        update_cache: yes
+        name: 
+          - gnupg
+          - apt-transport-https
+        state: present
+
+    - name: Add Elasticsearch repository
+      apt_repository:
+        repo: "deb [trusted=yes] https://mirror.yandex.ru/mirrors/elastic/7/ stable main"
+        state: present
+        filename: 'elastic-7.x'
+    
+    - name: Add Elasticsearch repository
+      apt_repository:
+        repo: 'deb [trusted=yes] https://mirror.yandex.ru/mirrors/elastic/7/ stable main'
+        state: present
+
+
+    - name: Update package list and install Elasticsearch
+      apt:
+        update_cache: yes
+        name: elasticsearch
+        state: present
+
+    - name: Reload systemd configuration
+      ansible.builtin.shell:
+        cmd: sudo systemctl daemon-reload
+
+    - name: Enable elasticsearch.service
+      systemd:
+        name: elasticsearch
+        enabled: yes
+
+    # - name: Start elasticsearch.service
+    #   systemd:
+    #     name: elasticsearch
+    #     state: started
+
+    - name: Deploy elasticsearch.yml from template
+      copy:
+        src: ./templates/Elasticsearch.yml
+        dest: /etc/elasticsearch/elasticsearch.yml
+        owner: elasticsearch
+        group: elasticsearch
+        mode: '0644'
+
+    - name: Restart Elasticsearch
+      systemd:
+        name: elasticsearch
+        state: restarted
+
+- name: Install and configure Kibana
+  hosts: Kibana
+  become: yes
+  tasks:
+
+    - name: Update package list
+      apt:
+        update_cache: yes
+
+    - name: Install wget and apt-transport-https
+      apt:
+        name:
+          - wget
+          - apt-transport-https
+        state: present
+   
+    - name: Add Elasticsearch repository
+      apt_repository:
+        repo: 'deb [trusted=yes] https://mirror.yandex.ru/mirrors/elastic/7/ stable main'
+        state: present
+
+    - name: Update apt package list after adding Elasticsearch repository
+      apt:
+        update_cache: yes
+
+    - name: Install Kibana
+      apt:
+        name: kibana
+        state: present
+
+    - name: Reload systemd configuration
+      ansible.builtin.shell:
+        cmd: sudo systemctl daemon-reload
+
+    - name: Enable kibana.service
+      systemd:
+        name: kibana
+        enabled: yes
+
+    - name: Start kibana.service
+      systemd:
+        name: kibana
+        state: started
+
+    - name: Configure /etc/kibana/kibana.yml
+      copy:
+        src: ./templates/kibana.yml
+        dest: /etc/kibana/kibana.yml
+
+    - name: Restart Kibana
+      systemd:
+        name: kibana
+        state: restarted
+
+- name: Install and configure Filebeat
+  hosts: Filebeat
+  become: yes
+  tasks:
+
+    - name: Update package list
+      apt:
+        update_cache: yes
+
+    - name: Install wget and apt-transport-https
+      apt:
+        name:
+          - wget
+          - apt-transport-https
+        state: present
+   
+    - name: Add Elasticsearch repository
+      apt_repository:
+        repo: 'deb [trusted=yes] https://mirror.yandex.ru/mirrors/elastic/7/ stable main'
+        state: present
+
+    - name: Update apt package list after adding Elasticsearch repository
+      apt:
+        update_cache: yes
+
+    - name: Install Filebeat
+      apt:
+        name: filebeat
+        state: present
+
+    - name: Reload systemd configuration
+      ansible.builtin.shell:
+        cmd: sudo systemctl daemon-reload
+
+    - name: Enable filebeat.service
+      systemd:
+        name: filebeat
+        enabled: yes
+
+    - name: Start filebeat.service
+      systemd:
+        name: filebeat
+        state: started
+
+    - name: Configure Filebeat
+      copy:
+        src: ./templates/filebeat.yml
+        dest: /etc/filebeat/filebeat.yml
+      notify:
+        - Restart Filebeat
+
+  handlers:
+    - name: Restart Filebeat
+      systemd:
+        name: filebeat
+        state: restarted
