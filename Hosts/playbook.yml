@@ -77,201 +77,97 @@
         name: nginx
         state: restarted
 
-- name: zabbix-server
-  hosts: zabbix-server
-  become: yes
+- name: "PostgreSQL Database prep"
+  when: true
+  become: true
+  become_user: postgres
+  delegate_to: "{{ 'localhost' | ternary(inventory_hostname, 'localhost') }}"
   vars:
-    pg_hba_conf: /etc/postgresql/14/main/pg_hba.conf
-    postgresql_conf: /etc/postgresql/14/main/postgresql.conf
+    delegated_dbhost: "{{ ('localhost' == 'localhost') | ternary(inventory_hostname, 'localhost') }}"
+  tags:
+    - database
+  block:
+    - name: "PostgreSQL | Create database"
+      community.postgresql.postgresql_db:
+        login_user: "postgres"
+        login_password: "postgres"
+        login_host: "localhost"
+        port: 5432
+        login_unix_socket: ""
+        name: "zabbix"
 
-  tasks:
-    - name: Ensure required packages are installed
-      apt:
-        name: 
-          - wget
-          - gnupg
-          - postgresql
-          - postgresql-contrib
-          - libpq-dev
-          - python3-pip
-          - python3-dev
-          - python3-venv
-          - python3-psycopg2
-        state: present
+    - name: "PostgreSQL | Create database user"
+      community.postgresql.postgresql_user:
+        login_user: "postgres"
+        login_password: "postgres"
+        login_host: "localhost"
+        port: 5432
+        login_unix_socket: ""
+        name: "zabbix"
+        password: "{{ ('md5' + ('zabbix' + 'zabbix') | hash('md5')) if 'md5' == 'md5' else 'zabbix' }}"
 
-    - name: Ensure pip is installed
-      apt:
-        name: python3-pip
-        state: present
+    - name: "PostgreSQL | Set database/user permissions"
+      community.postgresql.postgresql_privs:
+        login_user: "postgres"
+        login_password: "postgres"
+        login_host: "localhost"
+        port: 5432
+        login_unix_socket: ""
+        db: "zabbix"
+        privs: ALL
+        type: schema
+        objs: public
+        role: "zabbix"
 
-    - name: Download Zabbix release package
-      get_url:
-        url: https://repo.zabbix.com/zabbix/6.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.0-4+ubuntu22.04_all.deb
-        dest: /home/ubuntu/zabbix-release.deb
+    - name: "PostgreSQL | Create timescaledb extension"
+      when: false
+      community.postgresql.postgresql_ext:
+        login_user: "postgres"
+        login_password: "postgres"
+        login_host: "localhost"
+        port: 5432
+        login_unix_socket: ""
+        db: "zabbix"
+        name: timescaledb
 
+- name: "PostgreSQL verify or create schema"
+  when: true
+  tags:
+    - database
+  block:
+    - name: "PostgreSQL | Get current database version"
+      community.postgresql.postgresql_query:
+        login_user: "zabbix"
+        login_password: "zabbix"
+        login_host: "localhost"
+        port: 5432
+        db: "zabbix"
+        query: "SELECT mandatory FROM dbversion"
+  rescue:
+    - name: "PostgreSQL | Import schema"
+      community.postgresql.postgresql_db:
+        login_user: "zabbix"
+        login_password: "zabbix"
+        login_host: "localhost"
+        port: 5432
+        db: "zabbix"
+        state: restore
+        target: "/usr/share/doc/zabbix-sql-schema/postgresql/server.sql.gz"
 
-    - name: Install Zabbix release package using dpkg
-      apt:
-        deb: /home/ubuntu/zabbix-release.deb
-
-    - name: Update apt cache
-      apt:
-        update_cache: yes
-
-    - name: Install Zabbix server and related packages
-      apt:
-        name:
-          - zabbix-server-pgsql
-          - zabbix-frontend-php
-          - zabbix-apache-conf
-          - zabbix-sql-scripts
-          - zabbix-agent
-          - php8.1-pgsql
-        state: present
-
-    - name: Ensure PostgreSQL is installed
-      apt:
-        name: postgresql
-        state: present
-
-    - name: Ensure PostgreSQL is running and enabled
-      service:
-        name: postgresql
-        state: started
-        enabled: true
-
-    - name: Ensure the PostgreSQL client is installed
-      apt:
-        name: postgresql-client
-        state: present
-
-    - name: Install PostgreSQL development libraries (optional)
-      apt:
-        name: libpq-dev
-        state: present
-    
-    - name: Ensure the pg_hba.conf contains md5
-      ansible.builtin.lineinfile:
-        path: "{{ pg_hba_conf }}"
-        regexp: '^(local\s+all\s+all\s+)peer$'
-        line: 'local   all             all                                     md5'
-        backrefs: yes
-      
-
-    - name: Ensure IPv4 connections use md5
-      ansible.builtin.lineinfile:
-        path: "{{ pg_hba_conf }}"
-        regexp: '^host\s+all\s+all\s+127.0.0.1/32\s+peer$'
-        line: 'host    all             all             127.0.0.1/32            md5'
-        backrefs: yes
-      
-
-    - name: Ensure IPv6 connections use md5
-      ansible.builtin.lineinfile:
-        path: "{{ pg_hba_conf }}"
-        regexp: '^host\s+all\s+all\s+::1/128\s+peer$'
-        line: 'host    all             all             ::1/128                 md5'
-        backrefs: yes
-      
-
-    - name: Ensure replication connections use md5
-      ansible.builtin.lineinfile:
-        path: "{{ pg_hba_conf }}"
-        regexp: '^(local\s+replication\s+all\s+)peer$'
-        line: 'local   replication     all                                     md5'
-        backrefs: yes
-      
-
-    - name: Ensure replication host connections use md5
-      ansible.builtin.lineinfile:
-        path: "{{ pg_hba_conf }}"
-        regexp: '^host\s+replication\s+all\s+127.0.0.1/32\s+peer$'
-        line: 'host    replication     all             127.0.0.1/32            md5'
-        backrefs: yes
-      
-
-    - name: Ensure replication host connections over IPv6 use md5
-      ansible.builtin.lineinfile:
-        path: "{{ pg_hba_conf }}"
-        regexp: '^host\s+replication\s+all\s+::1/128\s+peer$'
-        line: 'host    replication     all             ::1/128                 md5'
-        backrefs: yes
-      
-    - name: Ensure replication connections use md5
-      ansible.builtin.lineinfile:
-        path: "{{ pg_hba_conf }}"
-        regexp: '^local\s+all\s+postgres\s+peer$'
-        line: 'local   all             postgres                                md5'
-        backrefs: yes
-
-    - name: Set listen_addresses in postgresql.conf
-      ansible.builtin.lineinfile:
-        path: "{{ postgresql_conf }}"
-        regexp: '^#listen_addresses = .*$'
-        line: "listen_addresses = '*'"
-        backrefs: yes
-      
-    - name: Create Zabbix database owned by Zabbix user
-      ansible.builtin.shell:
-        cmd: sudo chown -R postgres:postgres /usr/share/zabbix-sql-scripts
-
-    - name: Create Zabbix database owned by Zabbix user
-      ansible.builtin.shell:
-        cmd: sudo chmod -R u+rx /usr/share/zabbix-sql-scripts
-        
-    - name: Create Zabbix database owned by Zabbix user
-      ansible.builtin.shell:
-        cmd: sudo chmod o+rx /home/ubuntu
-
-    - name: Restart and enable Zabbix and related services
-      systemd:
-        name: "{{ item }}"
-        state: restarted
-        enabled: true
-      loop:
-        - postgresql
-
-    - name: Create Zabbix database owned by Zabbix user
-      ansible.builtin.shell:
-        cmd: su - postgres -c "psql --command \"ALTER USER postgres WITH PASSWORD 'zabbix';\""
-
-    - name: Create Zabbix database owned by Zabbix user
-      ansible.builtin.shell:
-        cmd: su - postgres -c "psql --command \"CREATE USER zabbix WITH PASSWORD 'zabbix';\""
-
-    - name: Create Zabbix database owned by Zabbix user
-      ansible.builtin.shell:
-        cmd: su - postgres -c "psql --command \"CREATE DATABASE zabbix OWNER zabbix;\""
-
-    - name: Restart and enable Zabbix and related services
-      systemd:
-        name: "{{ item }}"
-        state: restarted
-        enabled: true
-      loop:
-        - postgresql
-
-    - name: Load Zabbix schema
-      shell: |
-        zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | psql -U zabbix -d zabbix 
-      environment:
-        PGPASSWORD: "zabbix"
-   
-    - name: Set DBPassword in Zabbix server configuration
-      ansible.builtin.lineinfile:
-        path: /etc/zabbix/zabbix_server.conf
-        regexp: '^DBPassword='
-        line: 'DBPassword=zabbix'
-
-    - name: Restart and enable Zabbix and related services
-      systemd:
-        name: "{{ item }}"
-        state: restarted
-        enabled: true
-      loop:
-        - zabbix-server
-        - zabbix-agent
-        - apache2
+- name: "Configure Timescale"
+  when: false
+  tags:
+    - database
+  block:
+    - name: "PostgreSQL | Check if TimescaleDB has been configured"
+      community.postgresql.postgresql_query:
+        login_user: "zabbix"
+        login_password: "zabbix"
+        login_host: "localhost"
+        port: 5432
+        db: "zabbix"
+        query: "SELECT db_extension FROM config WHERE db_extension = 'timescaledb'"
+      register: _config_db_extension
 
 
 - name: Install Zabbix Agent
