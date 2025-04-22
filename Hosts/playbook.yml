@@ -84,7 +84,6 @@
   vars:
     pg_hba_conf: /etc/postgresql/14/main/pg_hba.conf
     postgresql_conf: /etc/postgresql/14/main/postgresql.conf
-
   tasks:
     - name: Ensure required packages are installed
       apt:
@@ -155,6 +154,7 @@
   hosts: zabbix-server
   become: true
   become_user: postgres
+  tasks:
     - name: "PostgreSQL | Create database"
       community.postgresql.postgresql_db:
         login_user: "postgres"
